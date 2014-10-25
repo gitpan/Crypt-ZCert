@@ -1,0 +1,420 @@
+package Crypt::ZCert;
+$Crypt::ZCert::VERSION = '0.001001';
+use v5.10;
+use Carp;
+use strictures 1;
+
+use FFI::Raw;
+
+use Convert::Z85;
+use Text::ZPL;
+
+use Try::Tiny;
+
+use List::Objects::WithUtils;
+
+use List::Objects::Types  -types;
+use Types::Path::Tiny     -types;
+use Types::Standard       -types;
+
+
+use Moo; use MooX::late;
+
+has adjust_permissions => (
+  is          => 'ro',
+  isa         => Bool,
+  builder     => sub { 1 },
+);
+
+has public_file => (
+  lazy        => 1,
+  is          => 'ro',
+  isa         => Maybe[Path],
+  coerce      => 1,
+  predicate   => 1,
+  builder     => sub { undef },
+);
+
+has secret_file => (
+  lazy        => 1,
+  is          => 'ro',
+  isa         => Maybe[Path],
+  coerce      => 1,
+  predicate   => 1,
+  builder     => sub {
+    my ($self) = @_;
+    $self->has_public_file ?
+      $self->public_file . '_secret'
+      : undef
+  },
+);
+
+
+has public_key_z85 => (
+  lazy        => 1,
+  is          => 'ro',
+  isa         => Str,
+  writer      => '_set_public_key_z85',
+  builder     => sub {
+    my ($self) = @_;
+    my $keypair = $self->generate_keypair;
+    $self->_set_secret_key_z85( $keypair->secret );
+    $keypair->public
+  },
+);
+
+has secret_key_z85 => (
+  lazy        => 1,
+  is          => 'ro',
+  isa         => Str,
+  writer      => '_set_secret_key_z85',
+  builder     => sub {
+    my ($self) = @_;
+    my $keypair = $self->generate_keypair;
+    $self->_set_public_key_z85( $keypair->public );
+    $keypair->secret
+  },
+);
+
+has public_key => (
+  lazy        => 1,
+  is          => 'ro',
+  isa         => Defined,
+  builder     => sub { decode_z85( shift->public_key_z85 ) },
+);
+
+has secret_key => (
+  lazy        => 1,
+  is          => 'ro',
+  isa         => Defined,
+  builder     => sub { decode_z85( shift->secret_key_z85 ) },
+);
+
+has metadata => (
+  lazy        => 1,
+  is          => 'ro',
+  isa         => HashObj,
+  coerce      => 1,
+  builder     => sub { +{} },
+);
+
+has zmq_soname => (
+  is          => 'ro',
+  isa         => Str,
+  builder     => sub {
+    # Early 4.x installs as libzmq.so.3 ->
+    state $search = [ qw/
+      libzmq.so.4
+      libzmq.so.4.0.0
+      libzmq.so.3
+      libzmq.so
+      libzmq.4.dylib
+      libzmq.3.dylib
+      libzmq.dylib
+    / ];
+
+    my ($soname, $zmq_vers);
+    SEARCH: for my $maybe (@$search) {
+      try {
+        $zmq_vers = FFI::Raw->new(
+          $maybe, zmq_version =>
+            FFI::Raw::void,
+            FFI::Raw::ptr,
+            FFI::Raw::ptr,
+            FFI::Raw::ptr,
+        );
+        $soname = $maybe;
+      };
+      last SEARCH if defined $soname;
+    } # SEARCH
+    croak "Failed to locate a suitable libzmq in your linker's search path"
+      unless defined $soname;
+
+    my ($maj, $min, $pat) = map {; pack 'i!', $_ } (0, 0, 0);
+    $zmq_vers->(
+      map {; unpack 'L!', pack 'P', $_ } $maj, $min, $pat
+    );
+    ($maj, $min, $pat) = map {; unpack 'i!', $_ } $maj, $min, $pat;
+    unless ($maj >= 4) {
+      my $vstr = join '.', $maj, $min, $pat;
+      croak "This library requires ZeroMQ 4+ but you only have $vstr"
+    }
+
+    $soname
+  },
+);
+
+has _zmq_errno => (
+  lazy        => 1,
+  is          => 'ro',
+  isa         => Object,
+  builder     => sub {
+    FFI::Raw->new(
+      shift->zmq_soname, zmq_errno => FFI::Raw::int
+    )
+  },
+);
+
+has _zmq_strerr => (
+  lazy        => 1,
+  is          => 'ro',
+  isa         => Object,
+  builder     => sub {
+    FFI::Raw->new(
+      shift->zmq_soname, zmq_strerror => FFI::Raw::str, FFI::Raw::int
+    )
+  },
+);
+
+sub _handle_zmq_error {
+  my ($self, $rc) = @_;
+  if ($rc == -1) {
+    my $errno  = $self->_zmq_errno->();
+    my $errstr = $self->_zmq_strerr->($errno);
+    confess "libzmq zmq_curve_keypair failed: $errstr ($errno)"
+  }
+}
+
+has _zmq_curve_keypair => (
+  lazy        => 1,
+  is          => 'ro',
+  isa         => Object,
+  builder     => sub {
+    my ($self) = @_;
+    FFI::Raw->new(
+      $self->zmq_soname, zmq_curve_keypair =>
+        FFI::Raw::int,  # <- rc
+        FFI::Raw::ptr,  # -> pub key ptr
+        FFI::Raw::ptr,  # -> sec key ptr
+    )
+  },
+);
+
+
+sub BUILD {
+  my ($self) = @_;
+  $self->_read_cert;
+}
+
+sub _read_cert {
+  my ($self) = @_;
+
+  return unless $self->has_secret_file or $self->has_public_file;
+  return unless $self->secret_file->exists;
+    
+  unless ($self->public_file->exists) {
+    warn "Found 'secret_file' but not 'public_file': ".$self->public_file,
+         " -- you may want to call a commit()"
+  }
+
+  my $secdata = decode_zpl( $self->secret_file->slurp );
+  
+  $secdata->{curve} ||= +{};
+  my $pubkey = $secdata->{curve}->{'public-key'};
+  my $seckey = $secdata->{curve}->{'secret-key'};
+  unless ($pubkey && $seckey) {
+    confess "Invalid ZCert; ".
+      "expected 'curve' section containing 'public-key' & 'secret-key'"
+  }
+  $self->_set_public_key_z85($pubkey);
+  $self->_set_secret_key_z85($seckey);
+  $self->metadata->set(%{ $secdata->{metadata} }) if $secdata->{metadata};
+}
+
+sub generate_keypair {
+  my ($self) = @_;
+
+  my ($pub, $sec) = (
+    FFI::Raw::memptr(41), FFI::Raw::memptr(41)
+  );
+
+  $self->_handle_zmq_error(
+    $self->_zmq_curve_keypair->($pub, $sec)
+  );
+
+  hash(
+    public => $pub->tostr,
+    secret => $sec->tostr,
+  )->inflate
+}
+
+sub commit {
+  my ($self) = @_;
+
+  confess "commit() called but no public_file / secret_file set"
+    unless $self->has_public_file
+      and  $self->public_file
+      and  $self->secret_file;
+
+  my $data = +{
+     curve    => +{
+      'public-key' => $self->public_key_z85,
+    },
+    metadata => $self->metadata,
+  };
+  
+  $self->public_file->spew( encode_zpl($data) );
+  $data->{curve}->{'secret-key'} = $self->secret_key_z85;
+  $self->secret_file->spew( encode_zpl($data) );
+  $self->secret_file->chmod(0600) if $self->adjust_permissions;
+
+  $data
+}
+
+
+
+1;
+
+=pod
+
+=for Pod::Coverage BUILD has_\w+_file
+
+=head1 NAME
+
+Crypt::ZCert - Manage ZeroMQ4+ ZCert CURVE certificates
+
+=head1 SYNOPSIS
+
+  use Crypt::ZCert;
+
+  my $zcert = Crypt::ZCert->new(
+    public_file => "/foo/mycert",
+    # Optionally specify a secret file;
+    # defaults to "${public_file}_secret":
+    secret_file => "/foo/sekrit",
+  );
+
+  # Loaded from existing 'secret_file' if present,
+  # generated via libzmq's zmq_curve_keypair(3) if not:
+  my $pubkey = $zcert->public_key;
+  my $seckey = $zcert->secret_key;
+
+  # ... or as the original Z85:
+  my $pub_z85 = $zcert->public_key_z85;
+  my $sec_z85 = $zcert->secret_key_z85;
+
+  # Commit any freshly generated keys to disk
+  # (as '/foo/mycert', '/foo/mycert_secret')
+  # Without 'adjust_permissions => 0', _secret becomes chmod 0600:
+  $zcert->commit;
+
+  # Retrieve a key pair (no on-disk certificate):
+  my $keypair = Crypt::ZCert->new->generate_keypair;
+  my $pub_z85 = $keypair->public;
+  my $sec_z85 = $keypair->secret;
+
+=head1 DESCRIPTION
+
+A module for managing ZeroMQ "ZCert" certificates and calling
+L<zmq_curve_keypair(3)> from L<libzmq|http://www.zeromq.org> to generate CURVE
+keys.
+
+=head2 ZCerts
+
+ZCert files are C<ZPL> format (see L<Text::ZPL>) with two subsections,
+C<curve> and C<metadata>. The C<curve> section specifies C<public-key> and
+C<secret-key> names whose values are C<Z85>-encoded (see L<Convert::Z85> CURVE
+keys.
+
+On disk, the certificate is stored as two files; a L</public_file> (containing
+only the public key) and a L</secret_file> (containing both keys).
+
+Also see: L<http://czmq.zeromq.org/manual:zcert>
+
+=head2 ATTRIBUTES
+
+=head3 public_file
+
+The path to the public ZCert.
+
+Coerced to a L<Path::Tiny>.
+
+Predicate: C<has_public_file>
+
+=head3 secret_file
+
+The path to the secret ZCert; defaults to appending '_secret' to
+L</public_file>.
+
+Coerced to a L<Path::Tiny>.
+
+Predicate: C<has_secret_file>
+
+=head3 adjust_permissions
+
+If boolean true, C<chmod> will be used to attempt to set the L</secret_file>'s
+permissions to C<0600> after writing.
+
+=head3 public_key
+
+The public key, as a 32-bit binary string.
+
+If none is specified at construction-time and no L</secret_file> exists, a new
+key pair is generated via L<zmq_curve_keypair(3)> and L</secret_key> is set
+appropriately.
+
+=head3 secret_key
+
+The secret key, as a 32-bit binary string.
+
+If none is specified at construction-time and no L</secret_file> exists, a new
+key pair is generated via L<zmq_curve_keypair(3)> and L</public_key> is set
+appropriately.
+
+=head3 public_key_z85
+
+The L</public_key>, as a C<Z85>-encoded ASCII string (see L<Convert::Z85>).
+
+=head3 secret_key_z85
+
+The L</secret_key>, as a C<Z85>-encoded ASCII string (see L<Convert::Z85>).
+
+=head3 metadata
+
+  # Get value:
+  my $foo = $zcert->metadata->get('foo');
+
+  # Iterate over metadata:
+  my $iter = $zcert->metadata->iter;
+  while ( my ($key, $val) = $iter->() ) {
+    print "$key -> $val\n";
+  }
+
+  # Update metadata & write to disk:
+  $zcert->metadata->set(foo => 'bar');
+  $zcert->commit;
+
+The certificate metadata, as a L<List::Objects::WithUtils::Hash>.
+
+If the object is constructed from an existing L</public_file> /
+L</secret_file>, metadata key/value pairs in the loaded file will override
+key/value pairs set in the object's C<metadata> hash.
+
+=head3 zmq_soname
+
+The C<libzmq> dynamic library name; by default, the newest available library
+is chosen.
+
+=head2 METHODS
+
+=head3 generate_keypair
+
+Generate and return a new key pair via L<zmq_curve_keypair(3)>; the current
+ZCert object remains unchanged.
+
+The returned key pair is a struct-like object with two accessors, B<public>
+and B<secret>:
+
+  my $keypair = $zcert->generate_keypair;
+  my $pub_z85 = $keypair->public;
+  my $sec_z85 = $keypair->secret;
+
+=head3 commit
+
+Write L</public_file> and L</secret_file> to disk.
+
+=head1 AUTHOR
+
+Jon Portnoy <avenj@cobaltirc.org>
+
+=cut

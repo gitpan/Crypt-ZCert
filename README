@@ -1,0 +1,131 @@
+NAME
+    Crypt::ZCert - Manage ZeroMQ4+ ZCert CURVE certificates
+
+SYNOPSIS
+      use Crypt::ZCert;
+
+      my $zcert = Crypt::ZCert->new(
+        public_file => "/foo/mycert",
+        # Optionally specify a secret file;
+        # defaults to "${public_file}_secret":
+        secret_file => "/foo/sekrit",
+      );
+
+      # Loaded from existing 'secret_file' if present,
+      # generated via libzmq's zmq_curve_keypair(3) if not:
+      my $pubkey = $zcert->public_key;
+      my $seckey = $zcert->secret_key;
+
+      # ... or as the original Z85:
+      my $pub_z85 = $zcert->public_key_z85;
+      my $sec_z85 = $zcert->secret_key_z85;
+
+      # Commit any freshly generated keys to disk
+      # (as '/foo/mycert', '/foo/mycert_secret')
+      # Without 'adjust_permissions => 0', _secret becomes chmod 0600:
+      $zcert->commit;
+
+      # Retrieve a key pair (no on-disk certificate):
+      my $keypair = Crypt::ZCert->new->generate_keypair;
+      my $pub_z85 = $keypair->public;
+      my $sec_z85 = $keypair->secret;
+
+DESCRIPTION
+    A module for managing ZeroMQ "ZCert" certificates and calling
+    zmq_curve_keypair(3) from libzmq <http://www.zeromq.org> to generate
+    CURVE keys.
+
+  ZCerts
+    ZCert files are "ZPL" format (see Text::ZPL) with two subsections,
+    "curve" and "metadata". The "curve" section specifies "public-key" and
+    "secret-key" names whose values are "Z85"-encoded (see Convert::Z85
+    CURVE keys.
+
+    On disk, the certificate is stored as two files; a "public_file"
+    (containing only the public key) and a "secret_file" (containing both
+    keys).
+
+    Also see: <http://czmq.zeromq.org/manual:zcert>
+
+  ATTRIBUTES
+   public_file
+    The path to the public ZCert.
+
+    Coerced to a Path::Tiny.
+
+    Predicate: "has_public_file"
+
+   secret_file
+    The path to the secret ZCert; defaults to appending '_secret' to
+    "public_file".
+
+    Coerced to a Path::Tiny.
+
+    Predicate: "has_secret_file"
+
+   adjust_permissions
+    If boolean true, "chmod" will be used to attempt to set the
+    "secret_file"'s permissions to 0600 after writing.
+
+   public_key
+    The public key, as a 32-bit binary string.
+
+    If none is specified at construction-time and no "secret_file" exists, a
+    new key pair is generated via zmq_curve_keypair(3) and "secret_key" is
+    set appropriately.
+
+   secret_key
+    The secret key, as a 32-bit binary string.
+
+    If none is specified at construction-time and no "secret_file" exists, a
+    new key pair is generated via zmq_curve_keypair(3) and "public_key" is
+    set appropriately.
+
+   public_key_z85
+    The "public_key", as a "Z85"-encoded ASCII string (see Convert::Z85).
+
+   secret_key_z85
+    The "secret_key", as a "Z85"-encoded ASCII string (see Convert::Z85).
+
+   metadata
+      # Get value:
+      my $foo = $zcert->metadata->get('foo');
+
+      # Iterate over metadata:
+      my $iter = $zcert->metadata->iter;
+      while ( my ($key, $val) = $iter->() ) {
+        print "$key -> $val\n";
+      }
+
+      # Update metadata & write to disk:
+      $zcert->metadata->set(foo => 'bar');
+      $zcert->commit;
+
+    The certificate metadata, as a List::Objects::WithUtils::Hash.
+
+    If the object is constructed from an existing "public_file" /
+    "secret_file", metadata key/value pairs in the loaded file will override
+    key/value pairs set in the object's "metadata" hash.
+
+   zmq_soname
+    The "libzmq" dynamic library name; by default, the newest available
+    library is chosen.
+
+  METHODS
+   generate_keypair
+    Generate and return a new key pair via zmq_curve_keypair(3); the current
+    ZCert object remains unchanged.
+
+    The returned key pair is a struct-like object with two accessors, public
+    and secret:
+
+      my $keypair = $zcert->generate_keypair;
+      my $pub_z85 = $keypair->public;
+      my $sec_z85 = $keypair->secret;
+
+   commit
+    Write "public_file" and "secret_file" to disk.
+
+AUTHOR
+    Jon Portnoy <avenj@cobaltirc.org>
+
