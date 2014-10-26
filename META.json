@@ -1,5 +1,5 @@
 {
-   "abstract" : "Manage ZeroMQ4+ ZCert CURVE certificates",
+   "abstract" : "Manage ZeroMQ 4+ ZCert CURVE keys and certificates",
    "author" : [
       "Jon Portnoy <avenj@cobaltirc.org>"
    ],
@@ -67,6 +67,6 @@
          "web" : "http://github.com/avenj/crypt-zcert"
       }
    },
-   "version" : "0.002001"
+   "version" : "0.002002"
 }
 

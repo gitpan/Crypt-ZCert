@@ -16,7 +16,7 @@ use ExtUtils::MakeMaker;
 
 
 my %WriteMakefileArgs = (
-  "ABSTRACT" => "Manage ZeroMQ4+ ZCert CURVE certificates",
+  "ABSTRACT" => "Manage ZeroMQ 4+ ZCert CURVE keys and certificates",
   "AUTHOR" => "Jon Portnoy <avenj\@cobaltirc.org>",
   "CONFIGURE_REQUIRES" => {
     "Devel::CheckLib" => "0.9",
@@ -46,7 +46,7 @@ my %WriteMakefileArgs = (
     "Path::Tiny" => 0,
     "Test::More" => 0
   },
-  "VERSION" => "0.002001",
+  "VERSION" => "0.002002",
   "test" => {
     "TESTS" => "t/*.t"
   }

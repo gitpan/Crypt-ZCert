@@ -1,5 +1,5 @@
 NAME
-    Crypt::ZCert - Manage ZeroMQ4+ ZCert CURVE certificates
+    Crypt::ZCert - Manage ZeroMQ 4+ ZCert CURVE keys and certificates
 
 SYNOPSIS
       use Crypt::ZCert;
@@ -46,7 +46,7 @@ DESCRIPTION
   ZCerts
     ZCert files are "ZPL" format (see Text::ZPL) with two subsections,
     "curve" and "metadata". The "curve" section specifies "public-key" and
-    "secret-key" names whose values are "Z85"-encoded (see Convert::Z85
+    "secret-key" names whose values are "Z85"-encoded (see Convert::Z85)
     CURVE keys.
 
     On disk, the certificate is stored as two files; a "public_file"
@@ -83,14 +83,14 @@ DESCRIPTION
     (Obviously, this should be used with caution.)
 
    public_key
-    The public key, as a 32-bit binary string.
+    The public key, as a binary string.
 
     If none is specified at construction-time and no "secret_file" exists, a
     new key pair is generated via zmq_curve_keypair(3) and "secret_key" is
     set appropriately.
 
    secret_key
-    The secret key, as a 32-bit binary string.
+    The secret key, as a binary string.
 
     If none is specified at construction-time and no "secret_file" exists, a
     new key pair is generated via zmq_curve_keypair(3) and "public_key" is
