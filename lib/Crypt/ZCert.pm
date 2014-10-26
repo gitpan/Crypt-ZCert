@@ -1,5 +1,5 @@
 package Crypt::ZCert;
-$Crypt::ZCert::VERSION = '0.001001';
+$Crypt::ZCert::VERSION = '0.002001';
 use v5.10;
 use Carp;
 use strictures 1;
@@ -24,6 +24,12 @@ has adjust_permissions => (
   is          => 'ro',
   isa         => Bool,
   builder     => sub { 1 },
+);
+
+has ignore_existing => (
+  is          => 'ro',
+  isa         => Bool,
+  builder     => sub { 0 },
 );
 
 has public_file => (
@@ -166,15 +172,6 @@ has _zmq_strerr => (
   },
 );
 
-sub _handle_zmq_error {
-  my ($self, $rc) = @_;
-  if ($rc == -1) {
-    my $errno  = $self->_zmq_errno->();
-    my $errstr = $self->_zmq_strerr->($errno);
-    confess "libzmq zmq_curve_keypair failed: $errstr ($errno)"
-  }
-}
-
 has _zmq_curve_keypair => (
   lazy        => 1,
   is          => 'ro',
@@ -193,18 +190,32 @@ has _zmq_curve_keypair => (
 
 sub BUILD {
   my ($self) = @_;
-  $self->_read_cert;
+  $self->_read_cert unless $self->ignore_existing;
 }
 
 sub _read_cert {
   my ($self) = @_;
 
   return unless $self->has_secret_file or $self->has_public_file;
-  return unless $self->secret_file->exists;
-    
-  unless ($self->public_file->exists) {
+
+  if (!$self->secret_file->exists) {
+    if ($self->public_file && $self->public_file->exists) {
+      # public_file exists, secret_file does not, do the safe thing and
+      # refuse to overwrite existing public_file:
+      confess "Found 'public_file' but not 'secret_file'; ",
+              "Check your key file paths, remove the 'public_file', ",
+              "or specify 'ignore_existing => 1' to overwrite"
+    }
+    return
+  }
+  
+  if ($self->public_file && !$self->public_file->exists) {
     warn "Found 'secret_file' but not 'public_file': ".$self->public_file,
          " -- you may want to call a commit()"
+  }
+
+  if (!$self->public_file) {
+    warn "No 'public_file' specified; commit() will fail!"
   }
 
   my $secdata = decode_zpl( $self->secret_file->slurp );
@@ -228,13 +239,35 @@ sub generate_keypair {
     FFI::Raw::memptr(41), FFI::Raw::memptr(41)
   );
 
-  $self->_handle_zmq_error(
-    $self->_zmq_curve_keypair->($pub, $sec)
-  );
+  if ( $self->_zmq_curve_keypair->($pub, $sec) == -1 ) {
+    my $errno  = $self->_zmq_errno->();
+    my $errstr = $self->_zmq_strerr->($errno);
+    confess "libzmq zmq_curve_keypair failed: $errstr ($errno)"
+  }
 
   hash(
     public => $pub->tostr,
     secret => $sec->tostr,
+  )->inflate
+}
+
+sub export_zcert {
+  my ($self) = @_;
+
+  my $data = +{
+     curve    => +{
+      'public-key' => $self->public_key_z85,
+    },
+    metadata => $self->metadata,
+  };
+  
+  my $public = encode_zpl $data;
+  $data->{curve}->{'secret-key'} = $self->secret_key_z85;
+  my $secret = encode_zpl $data;
+
+  hash(
+    public => $public,
+    secret => $secret,
   )->inflate
 }
 
@@ -246,19 +279,13 @@ sub commit {
       and  $self->public_file
       and  $self->secret_file;
 
-  my $data = +{
-     curve    => +{
-      'public-key' => $self->public_key_z85,
-    },
-    metadata => $self->metadata,
-  };
+  my $zcert = $self->export_zcert;
   
-  $self->public_file->spew( encode_zpl($data) );
-  $data->{curve}->{'secret-key'} = $self->secret_key_z85;
-  $self->secret_file->spew( encode_zpl($data) );
+  $self->public_file->spew( $zcert->public );
+  $self->secret_file->spew( $zcert->secret );
   $self->secret_file->chmod(0600) if $self->adjust_permissions;
 
-  $data
+  $self
 }
 
 
@@ -293,12 +320,20 @@ Crypt::ZCert - Manage ZeroMQ4+ ZCert CURVE certificates
   my $pub_z85 = $zcert->public_key_z85;
   my $sec_z85 = $zcert->secret_key_z85;
 
-  # Commit any freshly generated keys to disk
-  # (as '/foo/mycert', '/foo/mycert_secret')
+  # Alter metadata:
+  $zcert->metadata->set(foo => 'bar');
+
+  # Commit certificate to disk
+  # (as '/foo/mycert', '/foo/mycert_secret' pair)
   # Without 'adjust_permissions => 0', _secret becomes chmod 0600:
   $zcert->commit;
 
-  # Retrieve a key pair (no on-disk certificate):
+  # Retrieve a public/secret ZCert file pair without writing:
+  my $certdata = $zcert->export_zcert;
+  my $pubdata  = $certdata->public;
+  my $secdata  = $certdata->secret;
+
+  # Retrieve a newly-generated key pair (no certificate):
   my $keypair = Crypt::ZCert->new->generate_keypair;
   my $pub_z85 = $keypair->public;
   my $sec_z85 = $keypair->secret;
@@ -345,6 +380,14 @@ Predicate: C<has_secret_file>
 If boolean true, C<chmod> will be used to attempt to set the L</secret_file>'s
 permissions to C<0600> after writing.
 
+=head3 ignore_existing
+
+If boolean true, any existing L</public_file> / L</secret_file> will not be
+read; calling a L</commit> will cause a forcible key regeneration and rewrite
+of the existing certificate files.
+
+(Obviously, this should be used with caution.)
+
 =head3 public_key
 
 The public key, as a 32-bit binary string.
@@ -388,7 +431,7 @@ The certificate metadata, as a L<List::Objects::WithUtils::Hash>.
 
 If the object is constructed from an existing L</public_file> /
 L</secret_file>, metadata key/value pairs in the loaded file will override
-key/value pairs set in the object's C<metadata> hash.
+key/value pairs that were previously set in a passed C<metadata> hash.
 
 =head3 zmq_soname
 
@@ -396,6 +439,20 @@ The C<libzmq> dynamic library name; by default, the newest available library
 is chosen.
 
 =head2 METHODS
+
+=head3 commit
+
+Write L</public_file> and L</secret_file> to disk.
+
+=head3 export_zcert
+
+Generate and return the current ZCert; the certificate is represented as a
+struct-like object with two accessors, B<public> and B<secret>, containing
+ZPL-encoded ASCII text:
+
+  my $certdata = $zcert->export_zcert;
+  my $public_zpl = $certdata->public;
+  my $secret_zpl = $certdata->secret;
 
 =head3 generate_keypair
 
@@ -409,9 +466,15 @@ and B<secret>:
   my $pub_z85 = $keypair->public;
   my $sec_z85 = $keypair->secret;
 
-=head3 commit
+=head1 SEE ALSO
 
-Write L</public_file> and L</secret_file> to disk.
+L<Text::ZPL>
+
+L<Convert::Z85>
+
+L<POEx::ZMQ>
+
+L<ZMQ::FFI>
 
 =head1 AUTHOR
 

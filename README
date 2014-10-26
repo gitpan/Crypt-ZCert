@@ -20,12 +20,20 @@ SYNOPSIS
       my $pub_z85 = $zcert->public_key_z85;
       my $sec_z85 = $zcert->secret_key_z85;
 
-      # Commit any freshly generated keys to disk
-      # (as '/foo/mycert', '/foo/mycert_secret')
+      # Alter metadata:
+      $zcert->metadata->set(foo => 'bar');
+
+      # Commit certificate to disk
+      # (as '/foo/mycert', '/foo/mycert_secret' pair)
       # Without 'adjust_permissions => 0', _secret becomes chmod 0600:
       $zcert->commit;
 
-      # Retrieve a key pair (no on-disk certificate):
+      # Retrieve a public/secret ZCert file pair without writing:
+      my $certdata = $zcert->export_zcert;
+      my $pubdata  = $certdata->public;
+      my $secdata  = $certdata->secret;
+
+      # Retrieve a newly-generated key pair (no certificate):
       my $keypair = Crypt::ZCert->new->generate_keypair;
       my $pub_z85 = $keypair->public;
       my $sec_z85 = $keypair->secret;
@@ -67,6 +75,13 @@ DESCRIPTION
     If boolean true, "chmod" will be used to attempt to set the
     "secret_file"'s permissions to 0600 after writing.
 
+   ignore_existing
+    If boolean true, any existing "public_file" / "secret_file" will not be
+    read; calling a "commit" will cause a forcible key regeneration and
+    rewrite of the existing certificate files.
+
+    (Obviously, this should be used with caution.)
+
    public_key
     The public key, as a 32-bit binary string.
 
@@ -105,13 +120,25 @@ DESCRIPTION
 
     If the object is constructed from an existing "public_file" /
     "secret_file", metadata key/value pairs in the loaded file will override
-    key/value pairs set in the object's "metadata" hash.
+    key/value pairs that were previously set in a passed "metadata" hash.
 
    zmq_soname
     The "libzmq" dynamic library name; by default, the newest available
     library is chosen.
 
   METHODS
+   commit
+    Write "public_file" and "secret_file" to disk.
+
+   export_zcert
+    Generate and return the current ZCert; the certificate is represented as
+    a struct-like object with two accessors, public and secret, containing
+    ZPL-encoded ASCII text:
+
+      my $certdata = $zcert->export_zcert;
+      my $public_zpl = $certdata->public;
+      my $secret_zpl = $certdata->secret;
+
    generate_keypair
     Generate and return a new key pair via zmq_curve_keypair(3); the current
     ZCert object remains unchanged.
@@ -123,8 +150,14 @@ DESCRIPTION
       my $pub_z85 = $keypair->public;
       my $sec_z85 = $keypair->secret;
 
-   commit
-    Write "public_file" and "secret_file" to disk.
+SEE ALSO
+    Text::ZPL
+
+    Convert::Z85
+
+    POEx::ZMQ
+
+    ZMQ::FFI
 
 AUTHOR
     Jon Portnoy <avenj@cobaltirc.org>
