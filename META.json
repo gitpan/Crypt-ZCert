@@ -36,7 +36,7 @@
             "Convert::Z85" : "0",
             "FFI::Raw" : "0",
             "List::Objects::Types" : "1",
-            "List::Objects::WithUtils" : "2",
+            "List::Objects::WithUtils" : "2.016",
             "Moo" : "1",
             "MooX::late" : "0.014",
             "Text::ZPL" : "0",
@@ -54,7 +54,7 @@
          "requires" : {
             "ExtUtils::MakeMaker" : "0",
             "File::Spec" : "0",
-            "Path::Tiny" : "0",
+            "Path::Tiny" : "0.040",
             "Test::More" : "0"
          }
       }
@@ -67,6 +67,6 @@
          "web" : "http://github.com/avenj/crypt-zcert"
       }
    },
-   "version" : "0.002002"
+   "version" : "0.002003"
 }
 
