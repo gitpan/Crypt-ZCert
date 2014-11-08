@@ -1,8 +1,8 @@
 do { my $x = {
        'configure' => {
                         'requires' => {
-                                        'Devel::CheckLib' => '0.9',
-                                        'ExtUtils::MakeMaker' => '0'
+                                        'ExtUtils::MakeMaker' => '0',
+                                        'FFI::CheckLib' => '0.03'
                                       }
                       },
        'develop' => {

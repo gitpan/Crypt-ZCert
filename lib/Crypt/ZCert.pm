@@ -1,5 +1,5 @@
 package Crypt::ZCert;
-$Crypt::ZCert::VERSION = '0.002003';
+$Crypt::ZCert::VERSION = '0.002004';
 use v5.10;
 use Carp;
 use strictures 1;
@@ -86,14 +86,14 @@ has public_key => (
   lazy        => 1,
   is          => 'ro',
   isa         => Defined,
-  builder     => sub { decode_z85( shift->public_key_z85 ) },
+  builder     => sub { decode_z85 $_[0]->public_key_z85 },
 );
 
 has secret_key => (
   lazy        => 1,
   is          => 'ro',
   isa         => Defined,
-  builder     => sub { decode_z85( shift->secret_key_z85 ) },
+  builder     => sub { decode_z85 $_[0]->secret_key_z85 },
 );
 
 has metadata => (
@@ -177,9 +177,8 @@ has _zmq_curve_keypair => (
   is          => 'ro',
   isa         => Object,
   builder     => sub {
-    my ($self) = @_;
     FFI::Raw->new(
-      $self->zmq_soname, zmq_curve_keypair =>
+      shift->zmq_soname, zmq_curve_keypair =>
         FFI::Raw::int,  # <- rc
         FFI::Raw::ptr,  # -> pub key ptr
         FFI::Raw::ptr,  # -> sec key ptr
@@ -202,9 +201,12 @@ sub _read_cert {
     if ($self->public_file && $self->public_file->exists) {
       # public_file exists, secret_file does not, do the safe thing and
       # refuse to overwrite existing public_file:
+      my $secfile = $self->secret_file . '';
+      my $pubfile = $self->public_file . '';
       confess "Found 'public_file' but not 'secret_file'; ",
               "Check your key file paths, remove the 'public_file', ",
-              "or specify 'ignore_existing => 1' to overwrite"
+              "or specify 'ignore_existing => 1' to overwrite ",
+              "(pub: $pubfile) (sec: $secfile)"
     }
     return
   }
@@ -229,7 +231,9 @@ sub _read_cert {
   }
   $self->_set_public_key_z85($pubkey);
   $self->_set_secret_key_z85($seckey);
-  $self->metadata->set(%{ $secdata->{metadata} }) if $secdata->{metadata};
+  $self->metadata->set(%{ $secdata->{metadata} }) 
+    if $secdata->{metadata}
+    and keys %{ $secdata->{metadata} };
 }
 
 sub generate_keypair {

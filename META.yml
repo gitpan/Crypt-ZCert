@@ -8,10 +8,10 @@ build_requires:
   Path::Tiny: 0.040
   Test::More: 0
 configure_requires:
-  Devel::CheckLib: 0.9
   ExtUtils::MakeMaker: 0
+  FFI::CheckLib: 0.03
 dynamic_config: 0
-generated_by: 'Dist::Zilla version 5.021, CPAN::Meta::Converter version 2.142690'
+generated_by: 'Dist::Zilla version 5.024, CPAN::Meta::Converter version 2.142690'
 license: perl
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
@@ -32,4 +32,4 @@ requires:
   strictures: 1
 resources:
   repository: git://github.com/avenj/crypt-zcert.git
-version: 0.002003
+version: 0.002004
