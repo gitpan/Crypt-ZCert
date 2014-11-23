@@ -32,4 +32,4 @@ requires:
   strictures: 1
 resources:
   repository: git://github.com/avenj/crypt-zcert.git
-version: 0.002005
+version: 0.003001
